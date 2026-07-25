@@ -138,3 +138,158 @@ class LinkedMemoryGraph:
             for successor_id
             in memory.successor_ids
         )
+
+def score_phrase_set(
+    query: np.ndarray,
+    phrase_embeddings: tuple[np.ndarray, ...],
+) -> float:
+    """
+    Return the strongest semantic match between a query
+    and a set of alternative phrase embeddings.
+
+    The vectors are expected to be normalized.
+    """
+
+    if not phrase_embeddings:
+        raise ValueError(
+            "At least one phrase embedding is required."
+        )
+
+    return max(
+        float(
+            np.dot(
+                query,
+                phrase_embedding,
+            )
+        )
+        for phrase_embedding
+        in phrase_embeddings
+    )
+
+
+def rank_memories_by_triggers(
+    memories: tuple[LinkedMemory, ...],
+    query: np.ndarray,
+) -> list[MemoryScore]:
+    """
+    Rank memories using their specific trigger centres.
+    """
+
+    ranked = [
+        MemoryScore(
+            memory=memory,
+            score=score_phrase_set(
+                query=query,
+                phrase_embeddings=(
+                    memory.trigger_centers
+                ),
+            ),
+        )
+        for memory in memories
+    ]
+
+    ranked.sort(
+        key=lambda item: item.score,
+        reverse=True,
+    )
+
+    return ranked
+
+
+def select_root_memory(
+    graph: LinkedMemoryGraph,
+    query: np.ndarray,
+    minimum_score: float | None = None,
+) -> MemoryScore | None:
+    """
+    Select the root memory whose trigger phrases best
+    match the original query.
+    """
+
+    roots = graph.root_memories()
+
+    if not roots:
+        return None
+
+    selected = rank_memories_by_triggers(
+        memories=roots,
+        query=query,
+    )[0]
+
+    if (
+        minimum_score is not None
+        and selected.score < minimum_score
+    ):
+        return None
+
+    return selected
+
+
+def score_successors(
+    graph: LinkedMemoryGraph,
+    memory_id: str,
+    query: np.ndarray,
+) -> list[MemoryScore]:
+    """
+    Rank direct successor memories using their relation
+    intent phrases.
+
+    This deliberately does not use successor trigger
+    centres. Trigger centres control local flow geometry;
+    relation phrases control route selection.
+    """
+
+    successors = graph.successors(
+        memory_id
+    )
+
+    ranked = [
+        MemoryScore(
+            memory=memory,
+            score=score_phrase_set(
+                query=query,
+                phrase_embeddings=(
+                    memory.relation.phrase_embeddings
+                ),
+            ),
+        )
+        for memory in successors
+    ]
+
+    ranked.sort(
+        key=lambda item: item.score,
+        reverse=True,
+    )
+
+    return ranked
+
+
+def select_successor(
+    graph: LinkedMemoryGraph,
+    memory_id: str,
+    query: np.ndarray,
+    minimum_score: float | None = None,
+) -> MemoryScore | None:
+    """
+    Select the direct successor whose relation intent best
+    matches the original query.
+    """
+
+    scores = score_successors(
+        graph=graph,
+        memory_id=memory_id,
+        query=query,
+    )
+
+    if not scores:
+        return None
+
+    selected = scores[0]
+
+    if (
+        minimum_score is not None
+        and selected.score < minimum_score
+    ):
+        return None
+
+    return selected
