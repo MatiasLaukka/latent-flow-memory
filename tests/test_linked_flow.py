@@ -102,19 +102,41 @@ def test_edge_flow_reaches_target_threshold():
 
     assert final_similarity >= 0.95
 
-
-def test_edge_flow_reports_target_not_reached():
-    edge = create_memory(
+def test_edge_flow_reports_target_not_reached_with_zero_strength():
+    edge = LinkedMemory(
+        memory_id="inactive-edge",
+        source="source",
+        relation=RelationIntent(
+            name="relation",
+            phrase_embeddings=(
+                normalized(
+                    1.0,
+                    0.0,
+                ),
+            ),
+        ),
+        target="target",
+        trigger_centers=(
+            normalized(
+                1.0,
+                0.0,
+            ),
+        ),
+        target_vector=normalized(
+            0.0,
+            1.0,
+        ),
+        strength=0.0,
         radius=0.01,
     )
 
     result = flow_linked_edge(
         start=normalized(
-            -1.0,
+            1.0,
             0.0,
         ),
         memory=edge,
-        handoff_threshold=0.99,
+        handoff_threshold=0.95,
         max_steps=3,
         step_size=0.1,
     )
@@ -125,7 +147,6 @@ def test_edge_flow_reports_target_not_reached():
     )
     assert result.target_reached is False
     assert result.steps_used == 3
-
 
 def test_edge_flow_trajectory_contains_initial_state():
     start = normalized(
@@ -474,3 +495,35 @@ def test_linked_flow_reports_root_score_below_threshold():
         result.status
         == RoutingStatus.ROOT_SCORE_BELOW_THRESHOLD
     )
+
+
+def test_selected_edge_remains_active_after_leaving_trigger_region():
+    start = normalized(
+        1.0,
+        0.0,
+    )
+
+    target = normalized(
+        0.0,
+        1.0,
+    )
+
+    edge = create_memory(
+        center=start,
+        target=target,
+        radius=0.01,
+    )
+
+    result = flow_linked_edge(
+        start=start,
+        memory=edge,
+        handoff_threshold=0.95,
+        max_steps=100,
+        step_size=0.1,
+    )
+
+    assert (
+        result.status
+        == RoutingStatus.COMPLETED
+    )
+    assert result.target_reached is True

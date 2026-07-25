@@ -10,7 +10,6 @@ from src.linked_memory import (
     score_successors,
     select_root_memory,
 )
-from src.relations import gaussian_weight
 
 class RoutingStatus(str, Enum):
     """
@@ -395,27 +394,12 @@ def linked_memory_influence(
     x: np.ndarray,
 ) -> np.ndarray:
     """
-    Calculate the target-seeking influence of one linked
-    memory.
+    Calculate the influence of an already selected edge.
 
-    A linked memory may have several trigger centres. The
-    strongest local activation controls the edge strength.
+    Trigger centres are used during memory selection. Once
+    routing has selected this memory, the edge remains active
+    until it reaches its target or exhausts its step budget.
     """
-
-    if not memory.trigger_centers:
-        raise ValueError(
-            "Linked memory must have at least one "
-            "trigger centre."
-        )
-
-    weight = max(
-        gaussian_weight(
-            x=x,
-            center=center,
-            radius=memory.radius,
-        )
-        for center in memory.trigger_centers
-    )
 
     direction_to_target = (
         memory.target_vector
@@ -424,7 +408,6 @@ def linked_memory_influence(
 
     return (
         memory.strength
-        * weight
         * direction_to_target
     )
 
