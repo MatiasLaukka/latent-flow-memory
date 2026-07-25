@@ -8,6 +8,8 @@ from src.linked_memory import (
     LinkedMemory,
     RelationIntent,
 )
+from src.linked_flow import run_linked_flow
+from src.linked_memory import LinkedMemoryGraph
 
 
 def normalized(*values: float) -> np.ndarray:
@@ -217,4 +219,258 @@ def test_edge_flow_uses_strongest_trigger_center():
     assert (
         result.status
         == RoutingStatus.COMPLETED
+    )
+
+def branching_graph() -> LinkedMemoryGraph:
+    works_at = RelationIntent(
+        name="works-at",
+        phrase_embeddings=(
+            normalized(
+                0.7,
+                0.7,
+            ),
+        ),
+    )
+
+    headquarters = RelationIntent(
+        name="headquartered-in",
+        phrase_embeddings=(
+            normalized(
+                1.0,
+                0.0,
+            ),
+        ),
+    )
+
+    founded_by = RelationIntent(
+        name="founded-by",
+        phrase_embeddings=(
+            normalized(
+                0.0,
+                1.0,
+            ),
+        ),
+    )
+
+    root = LinkedMemory(
+        memory_id="bob-works-at-globex",
+        source="Bob",
+        relation=works_at,
+        target="Globex",
+        trigger_centers=(
+            normalized(
+                1.0,
+                0.0,
+            ),
+        ),
+        target_vector=normalized(
+            0.0,
+            1.0,
+        ),
+        successor_ids=(
+            "globex-headquartered-in-paris",
+            "globex-founded-by-susan",
+        ),
+        radius=2.0,
+    )
+
+    headquarters_memory = LinkedMemory(
+        memory_id="globex-headquartered-in-paris",
+        source="Globex",
+        relation=headquarters,
+        target="Paris",
+        trigger_centers=(
+            normalized(
+                0.0,
+                1.0,
+            ),
+        ),
+        target_vector=normalized(
+            -1.0,
+            0.0,
+        ),
+        radius=2.0,
+    )
+
+    founder_memory = LinkedMemory(
+        memory_id="globex-founded-by-susan",
+        source="Globex",
+        relation=founded_by,
+        target="Susan",
+        trigger_centers=(
+            normalized(
+                0.0,
+                1.0,
+            ),
+        ),
+        target_vector=normalized(
+            1.0,
+            0.0,
+        ),
+        radius=2.0,
+    )
+
+    return LinkedMemoryGraph(
+        memories=(
+            root,
+            headquarters_memory,
+            founder_memory,
+        ),
+        root_ids=(
+            root.memory_id,
+        ),
+    )
+
+
+def test_linked_flow_selects_headquarters_successor():
+    result = run_linked_flow(
+        query=normalized(
+            1.0,
+            0.0,
+        ),
+        graph=branching_graph(),
+        handoff_threshold=0.90,
+        max_steps_per_hop=100,
+        step_size=0.1,
+        max_hops=2,
+    )
+
+    assert (
+        result.status
+        == RoutingStatus.COMPLETED
+    )
+
+    assert result.traversed_memory_ids == (
+        "bob-works-at-globex",
+        "globex-headquartered-in-paris",
+    )
+
+
+def test_linked_flow_selects_founder_successor():
+    result = run_linked_flow(
+        query=normalized(
+            0.0,
+            1.0,
+        ),
+        graph=branching_graph(),
+        handoff_threshold=0.90,
+        max_steps_per_hop=100,
+        step_size=0.1,
+        max_hops=2,
+    )
+
+    assert (
+        result.status
+        == RoutingStatus.COMPLETED
+    )
+
+    assert result.traversed_memory_ids == (
+        "bob-works-at-globex",
+        "globex-founded-by-susan",
+    )
+
+
+def test_linked_flow_respects_successor_threshold():
+    result = run_linked_flow(
+        query=normalized(
+            0.7,
+            0.7,
+        ),
+        graph=branching_graph(),
+        handoff_threshold=0.90,
+        max_steps_per_hop=100,
+        step_size=0.1,
+        max_hops=2,
+        successor_minimum_score=0.95,
+    )
+
+    assert (
+        result.status
+        == RoutingStatus.NO_MATCHING_SUCCESSOR
+    )
+
+
+def test_linked_flow_reports_maximum_hops_reached():
+    result = run_linked_flow(
+        query=normalized(
+            1.0,
+            0.0,
+        ),
+        graph=branching_graph(),
+        handoff_threshold=0.90,
+        max_steps_per_hop=100,
+        step_size=0.1,
+        max_hops=1,
+    )
+
+    assert (
+        result.status
+        == RoutingStatus.MAXIMUM_HOPS_REACHED
+    )
+
+
+def test_linked_flow_reports_no_root_memory():
+    graph = LinkedMemoryGraph(
+        memories=(),
+        root_ids=(),
+    )
+
+    result = run_linked_flow(
+        query=normalized(
+            1.0,
+            0.0,
+        ),
+        graph=graph,
+    )
+
+    assert (
+        result.status
+        == RoutingStatus.NO_ROOT_MEMORY
+    )
+
+
+def test_linked_flow_reports_root_score_below_threshold():
+    root = LinkedMemory(
+        memory_id="root",
+        source="Bob",
+        relation=RelationIntent(
+            name="works-at",
+            phrase_embeddings=(
+                normalized(
+                    1.0,
+                    0.0,
+                ),
+            ),
+        ),
+        target="Globex",
+        trigger_centers=(
+            normalized(
+                0.0,
+                1.0,
+            ),
+        ),
+        target_vector=normalized(
+            1.0,
+            0.0,
+        ),
+        radius=2.0,
+    )
+
+    graph = LinkedMemoryGraph(
+        memories=(root,),
+        root_ids=(root.memory_id,),
+    )
+
+    result = run_linked_flow(
+        query=normalized(
+            1.0,
+            0.0,
+        ),
+        graph=graph,
+        root_minimum_score=0.5,
+    )
+
+    assert (
+        result.status
+        == RoutingStatus.ROOT_SCORE_BELOW_THRESHOLD
     )
