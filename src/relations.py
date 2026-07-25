@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from src.dynamics import normalize
 
 import numpy as np
 
@@ -94,3 +95,72 @@ def target_memory_influence(
         * weight
         * direction_to_target
     )
+
+def target_vector_field(
+    x: np.ndarray,
+    memories: list[TargetMemory],
+) -> np.ndarray:
+    """
+    Sum the influence of every target-seeking memory.
+    """
+
+    total = np.zeros_like(x)
+
+    for memory in memories:
+        total = (
+            total
+            + target_memory_influence(
+                memory=memory,
+                x=x,
+            )
+        )
+
+    return total
+
+
+def target_flow(
+    start: np.ndarray,
+    memories: list[TargetMemory],
+    steps: int = 10,
+    step_size: float = 0.1,
+) -> tuple[np.ndarray, list[np.ndarray]]:
+    """
+    Move a latent state through the target-seeking field.
+
+    Update rule:
+
+        x(t+1) = normalize(
+            x(t) + step_size * V(x(t))
+        )
+    """
+
+    current = np.array(
+        start,
+        dtype=np.float32,
+        copy=True,
+    )
+
+    current = normalize(current)
+
+    trajectory = [
+        current.copy()
+    ]
+
+    for _ in range(steps):
+        direction = target_vector_field(
+            x=current,
+            memories=memories,
+        )
+
+        current = (
+            current
+            + step_size * direction
+        )
+
+        current = normalize(current)
+
+        trajectory.append(
+            current.copy()
+        )
+
+    return current, trajectory

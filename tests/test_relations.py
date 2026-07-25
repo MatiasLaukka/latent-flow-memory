@@ -2,9 +2,145 @@ import numpy as np
 
 from src.relations import (
     TargetMemory,
+    target_flow,
     target_memory_influence,
+    target_vector_field,
 )
 
+def test_target_vector_field_sums_memories():
+    x = np.array(
+        [0.0, 0.0],
+        dtype=np.float32,
+    )
+
+    right_memory = TargetMemory(
+        center=x,
+        target=np.array(
+            [1.0, 0.0],
+            dtype=np.float32,
+        ),
+        radius=1.0,
+    )
+
+    upward_memory = TargetMemory(
+        center=x,
+        target=np.array(
+            [0.0, 1.0],
+            dtype=np.float32,
+        ),
+        radius=1.0,
+    )
+
+    result = target_vector_field(
+        x=x,
+        memories=[
+            right_memory,
+            upward_memory,
+        ],
+    )
+
+    assert np.allclose(
+        result,
+        np.array(
+            [1.0, 1.0],
+            dtype=np.float32,
+        ),
+    )
+
+
+def test_target_flow_moves_toward_target():
+    start = np.array(
+        [1.0, 0.0],
+        dtype=np.float32,
+    )
+
+    target = np.array(
+        [0.0, 1.0],
+        dtype=np.float32,
+    )
+
+    memory = TargetMemory(
+        center=start,
+        target=target,
+        radius=2.0,
+    )
+
+    final_state, trajectory = target_flow(
+        start=start,
+        memories=[memory],
+        steps=5,
+        step_size=0.1,
+    )
+
+    similarity_before = float(
+        np.dot(start, target)
+    )
+
+    similarity_after = float(
+        np.dot(final_state, target)
+    )
+
+    assert similarity_after > similarity_before
+    assert len(trajectory) == 6
+
+
+def test_target_flow_leaves_state_unchanged_without_memories():
+    start = np.array(
+        [1.0, 0.0],
+        dtype=np.float32,
+    )
+
+    final_state, trajectory = target_flow(
+        start=start,
+        memories=[],
+        steps=5,
+        step_size=0.1,
+    )
+
+    assert np.allclose(
+        final_state,
+        start,
+        atol=1e-6,
+    )
+
+    assert len(trajectory) == 6
+
+
+def test_target_flow_movement_diminishes_near_target():
+    start = np.array(
+        [1.0, 0.0],
+        dtype=np.float32,
+    )
+
+    target = np.array(
+        [0.0, 1.0],
+        dtype=np.float32,
+    )
+
+    memory = TargetMemory(
+        center=start,
+        target=target,
+        radius=2.0,
+    )
+
+    _, trajectory = target_flow(
+        start=start,
+        memories=[memory],
+        steps=10,
+        step_size=0.1,
+    )
+
+    first_movement = np.linalg.norm(
+        trajectory[1]
+        - trajectory[0]
+    )
+
+    final_movement = np.linalg.norm(
+        trajectory[-1]
+        - trajectory[-2]
+    )
+
+    assert final_movement < first_movement
 
 def test_target_memory_influence_points_toward_target():
     # Start at the origin.
