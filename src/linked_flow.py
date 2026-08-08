@@ -7,8 +7,13 @@ from src.dynamics import normalize
 from src.linked_memory import (
     LinkedMemory,
     LinkedMemoryGraph,
+    MemoryScore,
+    rank_memories_by_triggers,
     score_successors,
-    select_root_memory,
+)
+from src.thought_routes import (
+    ThoughtRouteStore,
+    route_bonus,
 )
 
 class RoutingStatus(str, Enum):
@@ -77,6 +82,48 @@ class LinkedFlowResult:
     root_selection_score: float | None
     failure_reason: str | None
 
+def _route_adjusted_score(
+    *,
+    semantic_score: float,
+    candidate_memory_id: str,
+    traversed_prefix: tuple[str, ...],
+    query: np.ndarray,
+    thought_routes: ThoughtRouteStore | None,
+    bonus_scale: float,
+) -> float:
+    """
+    Add the strongest compatible learned-route bonus
+    to a semantic routing score.
+    """
+
+    if thought_routes is None:
+        return semantic_score
+
+    candidate_prefix = (
+        traversed_prefix
+        + (candidate_memory_id,)
+    )
+
+    compatible = (
+        thought_routes.compatible_routes(
+            prefix=candidate_prefix,
+        )
+    )
+
+    if not compatible:
+        return semantic_score
+
+    bonus = max(
+        route_bonus(
+            route=route,
+            query=query,
+            bonus_scale=bonus_scale,
+        )
+        for route in compatible
+    )
+
+    return semantic_score + bonus
+
 def run_linked_flow(
     query: np.ndarray,
     graph: LinkedMemoryGraph,
@@ -87,6 +134,8 @@ def run_linked_flow(
     max_hops: int = 4,
     root_minimum_score: float | None = None,
     successor_minimum_score: float | None = None,
+    thought_routes: ThoughtRouteStore | None = None,
+    route_bonus_scale: float | None = None,
 ) -> LinkedFlowResult:
     """
     Select a root memory and traverse query-conditioned
@@ -103,6 +152,16 @@ def run_linked_flow(
 
     current = original_query.copy()
 
+    effective_bonus_scale = (
+        route_bonus_scale
+        if route_bonus_scale is not None
+        else (
+            thought_routes.config.bonus_scale
+            if thought_routes is not None
+            else 0.0
+        )
+    )
+
     if not graph.root_ids:
         return LinkedFlowResult(
             status=RoutingStatus.NO_ROOT_MEMORY,
@@ -117,9 +176,41 @@ def run_linked_flow(
             ),
         )
 
-    root_without_threshold = select_root_memory(
-        graph=graph,
-        query=original_query,
+    semantic_root_scores = (
+        rank_memories_by_triggers(
+            memories=graph.root_memories(),
+            query=original_query,
+        )
+    )
+
+    adjusted_root_scores = [
+        MemoryScore(
+            memory=score.memory,
+            score=_route_adjusted_score(
+                semantic_score=score.score,
+                candidate_memory_id=(
+                    score.memory.memory_id
+                ),
+                traversed_prefix=(),
+                query=original_query,
+                thought_routes=thought_routes,
+                bonus_scale=(
+                    effective_bonus_scale
+                ),
+            ),
+        )
+        for score in semantic_root_scores
+    ]
+
+    adjusted_root_scores.sort(
+        key=lambda item: item.score,
+        reverse=True,
+    )
+
+    root_without_threshold = (
+        adjusted_root_scores[0]
+        if adjusted_root_scores
+        else None
     )
 
     if root_without_threshold is None:
@@ -242,6 +333,32 @@ def run_linked_flow(
             graph=graph,
             memory_id=memory.memory_id,
             query=original_query,
+        )
+
+        successor_scores = [
+            MemoryScore(
+                memory=score.memory,
+                score=_route_adjusted_score(
+                    semantic_score=score.score,
+                    candidate_memory_id=(
+                        score.memory.memory_id
+                    ),
+                    traversed_prefix=tuple(
+                        traversed_ids
+                    ),
+                    query=original_query,
+                    thought_routes=thought_routes,
+                    bonus_scale=(
+                        effective_bonus_scale
+                    ),
+                ),
+            )
+            for score in successor_scores
+        ]
+
+        successor_scores.sort(
+            key=lambda item: item.score,
+            reverse=True,
         )
 
         hop_records.append(

@@ -10,6 +10,7 @@ from src.linked_memory import (
 )
 from src.linked_flow import run_linked_flow
 from src.linked_memory import LinkedMemoryGraph
+from src.thought_routes import ThoughtRouteStore
 
 
 def normalized(*values: float) -> np.ndarray:
@@ -527,3 +528,299 @@ def test_selected_edge_remains_active_after_leaving_trigger_region():
         == RoutingStatus.COMPLETED
     )
     assert result.target_reached is True
+
+def test_reinforced_route_can_win_close_root_selection():
+    query = normalized(
+        1.0,
+        0.0,
+    )
+
+    works_at = RelationIntent(
+        name="works-at",
+        phrase_embeddings=(
+            query,
+        ),
+    )
+
+    next_relation = RelationIntent(
+        name="next",
+        phrase_embeddings=(
+            query,
+        ),
+    )
+
+    root_a = LinkedMemory(
+        memory_id="root-a",
+        source="A",
+        relation=works_at,
+        target="A-company",
+        trigger_centers=(
+            normalized(
+                0.99,
+                np.sqrt(
+                    1.0 - 0.99**2
+                ),
+            ),
+        ),
+        target_vector=normalized(
+            0.0,
+            1.0,
+        ),
+        successor_ids=(
+            "a-next",
+        ),
+        radius=2.0,
+    )
+
+    root_b = LinkedMemory(
+        memory_id="root-b",
+        source="B",
+        relation=works_at,
+        target="B-company",
+        trigger_centers=(
+            normalized(
+                0.995,
+                np.sqrt(
+                    1.0 - 0.995**2
+                ),
+            ),
+        ),
+        target_vector=normalized(
+            0.0,
+            -1.0,
+        ),
+        successor_ids=(
+            "b-next",
+        ),
+        radius=2.0,
+    )
+
+    a_next = LinkedMemory(
+        memory_id="a-next",
+        source="A-company",
+        relation=next_relation,
+        target="A-answer",
+        trigger_centers=(
+            normalized(
+                0.0,
+                1.0,
+            ),
+        ),
+        target_vector=normalized(
+            -1.0,
+            0.0,
+        ),
+        radius=2.0,
+    )
+
+    b_next = LinkedMemory(
+        memory_id="b-next",
+        source="B-company",
+        relation=next_relation,
+        target="B-answer",
+        trigger_centers=(
+            normalized(
+                0.0,
+                -1.0,
+            ),
+        ),
+        target_vector=normalized(
+            -1.0,
+            0.0,
+        ),
+        radius=2.0,
+    )
+
+    graph = LinkedMemoryGraph(
+        memories=(
+            root_a,
+            root_b,
+            a_next,
+            b_next,
+        ),
+        root_ids=(
+            "root-a",
+            "root-b",
+        ),
+    )
+
+    baseline = run_linked_flow(
+        query=query,
+        graph=graph,
+        handoff_threshold=0.90,
+        max_steps_per_hop=100,
+        step_size=0.1,
+        max_hops=2,
+    )
+
+    assert baseline.traversed_memory_ids[0] == (
+        "root-b"
+    )
+
+    store = ThoughtRouteStore()
+
+    store.record_validated_success(
+        memory_ids=(
+            "root-a",
+            "a-next",
+        ),
+        context_embedding=query,
+    )
+
+    reinforced = run_linked_flow(
+        query=query,
+        graph=graph,
+        handoff_threshold=0.90,
+        max_steps_per_hop=100,
+        step_size=0.1,
+        max_hops=2,
+        thought_routes=store,
+    )
+
+    assert reinforced.traversed_memory_ids == (
+        "root-a",
+        "a-next",
+    )
+
+
+def test_reinforced_route_can_win_close_successor_selection():
+    query = normalized(
+        1.0,
+        0.0,
+    )
+
+    root_relation = RelationIntent(
+        name="root",
+        phrase_embeddings=(
+            query,
+        ),
+    )
+
+    relation_a = RelationIntent(
+        name="relation-a",
+        phrase_embeddings=(
+            normalized(
+                0.99,
+                np.sqrt(
+                    1.0 - 0.99**2
+                ),
+            ),
+        ),
+    )
+
+    relation_b = RelationIntent(
+        name="relation-b",
+        phrase_embeddings=(
+            normalized(
+                0.995,
+                np.sqrt(
+                    1.0 - 0.995**2
+                ),
+            ),
+        ),
+    )
+
+    root = LinkedMemory(
+        memory_id="root",
+        source="source",
+        relation=root_relation,
+        target="middle",
+        trigger_centers=(
+            query,
+        ),
+        target_vector=normalized(
+            0.0,
+            1.0,
+        ),
+        successor_ids=(
+            "successor-a",
+            "successor-b",
+        ),
+        radius=2.0,
+    )
+
+    successor_a = LinkedMemory(
+        memory_id="successor-a",
+        source="middle",
+        relation=relation_a,
+        target="answer-a",
+        trigger_centers=(
+            normalized(
+                0.0,
+                1.0,
+            ),
+        ),
+        target_vector=normalized(
+            -1.0,
+            0.0,
+        ),
+        radius=2.0,
+    )
+
+    successor_b = LinkedMemory(
+        memory_id="successor-b",
+        source="middle",
+        relation=relation_b,
+        target="answer-b",
+        trigger_centers=(
+            normalized(
+                0.0,
+                1.0,
+            ),
+        ),
+        target_vector=normalized(
+            1.0,
+            0.0,
+        ),
+        radius=2.0,
+    )
+
+    graph = LinkedMemoryGraph(
+        memories=(
+            root,
+            successor_a,
+            successor_b,
+        ),
+        root_ids=(
+            "root",
+        ),
+    )
+
+    baseline = run_linked_flow(
+        query=query,
+        graph=graph,
+        handoff_threshold=0.90,
+        max_steps_per_hop=100,
+        step_size=0.1,
+        max_hops=2,
+    )
+
+    assert baseline.traversed_memory_ids == (
+        "root",
+        "successor-b",
+    )
+
+    store = ThoughtRouteStore()
+
+    store.record_validated_success(
+        memory_ids=(
+            "root",
+            "successor-a",
+        ),
+        context_embedding=query,
+    )
+
+    reinforced = run_linked_flow(
+        query=query,
+        graph=graph,
+        handoff_threshold=0.90,
+        max_steps_per_hop=100,
+        step_size=0.1,
+        max_hops=2,
+        thought_routes=store,
+    )
+
+    assert reinforced.traversed_memory_ids == (
+        "root",
+        "successor-a",
+    )
