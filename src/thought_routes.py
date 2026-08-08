@@ -1,4 +1,5 @@
 from dataclasses import dataclass, replace
+from typing import Protocol
 
 import numpy as np
 
@@ -20,6 +21,65 @@ class ThoughtRoute:
     strength: float
     successful_uses: int
     explicit_confirmations: int
+
+class CompletedRouteResult(Protocol):
+    """
+    Structural interface for a routing result.
+
+    We deliberately do not import LinkedFlowResult here.
+
+    Why?
+    linked_flow.py already imports ThoughtRouteStore.
+    If thought_routes.py imported linked_flow.py back,
+    the two modules would depend on each other and create
+    a circular import.
+
+    A Protocol lets us say:
+    "I accept anything with these fields."
+    """
+
+    status: object
+    traversed_memory_ids: tuple[str, ...]
+
+def context_similarity(
+    *,
+    route: ThoughtRoute,
+    query: np.ndarray,
+) -> float:
+    if not route.context_embeddings:
+        return 0.0
+
+    return max(
+        float(
+            np.dot(
+                query,
+                context,
+            )
+        )
+        for context
+        in route.context_embeddings
+    )
+
+
+def route_bonus(
+    *,
+    route: ThoughtRoute,
+    query: np.ndarray,
+    bonus_scale: float,
+) -> float:
+    similarity = max(
+        0.0,
+        context_similarity(
+            route=route,
+            query=query,
+        ),
+    )
+
+    return (
+        bonus_scale
+        * similarity
+        * route.strength
+    )
 
 
 class ThoughtRouteStore:
@@ -50,6 +110,22 @@ class ThoughtRouteStore:
     ) -> ThoughtRoute | None:
         return self._routes.get(
             tuple(memory_ids)
+        )
+
+    def compatible_routes(
+        self,
+        *,
+        prefix: tuple[str, ...],
+    ) -> tuple[ThoughtRoute, ...]:
+        wanted = tuple(prefix)
+
+        return tuple(
+            route
+            for route
+            in self._routes.values()
+            if route.memory_ids[
+                :len(wanted)
+            ] == wanted
         )
 
     def record_validated_success(
@@ -94,12 +170,32 @@ class ThoughtRouteStore:
             )
 
         else:
+            already_known = any(
+                float(
+                    np.dot(
+                        context,
+                        known_context,
+                    )
+                ) >= 0.999999
+                for known_context
+                in existing.context_embeddings
+            )
+
+            if already_known:
+                contexts = (
+                    existing
+                    .context_embeddings
+                )
+            else:
+                contexts = (
+                    existing
+                    .context_embeddings
+                    + (context,)
+                )
+
             route = replace(
                 existing,
-                context_embeddings=(
-                    existing.context_embeddings
-                    + (context,)
-                ),
+                context_embeddings=contexts,
                 strength=min(
                     (
                         self.config
@@ -112,7 +208,8 @@ class ThoughtRouteStore:
                     ),
                 ),
                 successful_uses=(
-                    existing.successful_uses
+                    existing
+                    .successful_uses
                     + 1
                 ),
             )
@@ -120,6 +217,62 @@ class ThoughtRouteStore:
         self._routes[key] = route
 
         return route
+
+    def record_validated_result(
+        self,
+        *,
+        result: CompletedRouteResult,
+        context_embedding: np.ndarray,
+        outcome_valid: bool,
+    ) -> ThoughtRoute | None:
+        """
+        Learn from a routing result only when there is
+        positive evidence that the complete route worked.
+
+        The router selecting a route is not itself proof
+        that the route was correct. That distinction is
+        important: otherwise routing mistakes would train
+        themselves into stronger future habits.
+        """
+
+        # RoutingStatus inherits from str + Enum, but using
+        # `.value` when available also keeps this method
+        # compatible with lightweight test doubles.
+        status_value = getattr(
+            result.status,
+            "value",
+            result.status,
+        )
+
+        # Incomplete routing is not a successful experience.
+        if status_value != "completed":
+            return None
+
+        # Completion alone is insufficient. The caller must
+        # independently validate that the result was useful
+        # or correct.
+        if not outcome_valid:
+            return None
+
+        # ThoughtRoute represents a learned multi-step
+        # pattern. A single memory is not a route for this
+        # milestone.
+        if len(
+            result.traversed_memory_ids
+        ) < 2:
+            return None
+
+        # Once all evidence gates pass, delegate to the
+        # existing reinforcement primitive instead of
+        # duplicating its creation/update logic.
+        return self.record_validated_success(
+            memory_ids=(
+                result.traversed_memory_ids
+            ),
+            context_embedding=(
+                context_embedding
+            ),
+        )
 
     def record_explicit_confirmation(
         self,
@@ -152,7 +305,8 @@ class ThoughtRouteStore:
                 ),
             ),
             explicit_confirmations=(
-                existing.explicit_confirmations
+                existing
+                .explicit_confirmations
                 + 1
             ),
         )
